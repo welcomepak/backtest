@@ -17,7 +17,7 @@ with col1:
 with col2:
     start_date = st.date_input("백테스팅 시작일", value=date(2020, 1, 1))
 with col3:
-    end_date = st.date_input("백테스팅 종료일", value=date(2026, 11, 7))
+    end_date = st.date_input("백테스팅 종료일", value=date.today())
 with col4:
     drop_pct = st.number_input(
         "매수 기준 (전일 대비 하락률 %)",
