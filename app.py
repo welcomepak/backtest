@@ -96,11 +96,80 @@ if total_buys > 0:
 else:
     m4.metric("평단 대비 현재 수익률", "-")
 
-# 5. PC(마우스) + 스마트폰(터치 핀치/스와이프) 통합 제어 자바스크립트
-custom_interaction_js = """
-(function() {
-  var gd = document.getElementById('{plot_id}');
+# 차트 제목을 차트 바깥 영역에 배치 (모바일 글씨 겹침 방지 + 터치 시 페이지 스크롤 허용)
+st.subheader(f"{ticker} — 전일대비 {drop_pct:.1f}% 하락 시 매수 ({start_date} ~ {end_date})")
+
+# 5. 전체 축 범위 고정값 계산 (축소 시 차트가 가운데로 작아지는 현상 방지)
+full_x0 = -0.5
+full_x1 = float(len(df_all)) - 0.5
+
+y_candidates_low = [df_all['Low'].min()]
+if not df_all['Buy_Signal'].empty and df_all['Buy_Signal'].any():
+    y_candidates_low.append((df_all.loc[df_all['Buy_Signal'], 'Low'] * 0.96).min())
+for ma_col in ['MA20', 'MA120', 'MA240', 'Method5_Avg_Price']:
+    if df_all[ma_col].notna().any():
+        y_candidates_low.append(df_all[ma_col].min())
+
+y_candidates_high = [df_all['High'].max()]
+for ma_col in ['MA20', 'MA120', 'MA240', 'Method5_Avg_Price']:
+    if df_all[ma_col].notna().any():
+        y_candidates_high.append(df_all[ma_col].max())
+
+y_min_val = float(min(y_candidates_low))
+y_max_val = float(max(y_candidates_high))
+y_pad = (y_max_val - y_min_val) * 0.05 if y_max_val > y_min_val else 1.0
+full_y0 = max(0.0, y_min_val - y_pad)
+full_y1 = y_max_val + y_pad
+
+# 6. PC(마우스) + 스마트폰(터치 핀치/스와이프 + 경계 고정) 통합 제어 자바스크립트
+custom_interaction_js = f"""
+(function() {{
+  var gd = document.getElementById('{{plot_id}}');
   if (!gd) return;
+
+  var FULL_X0 = {full_x0};
+  var FULL_X1 = {full_x1};
+  var FULL_X_SPAN = FULL_X1 - FULL_X0;
+  var MIN_X_SPAN = Math.min(5.0, FULL_X_SPAN);
+
+  var FULL_Y0 = {full_y0};
+  var FULL_Y1 = {full_y1};
+  var FULL_Y_SPAN = FULL_Y1 - FULL_Y0;
+  var MIN_Y_SPAN = FULL_Y_SPAN * 0.02;
+
+  function clampRanges(x0, x1, y0, y1) {{
+    var xSpan = x1 - x0;
+    if (xSpan >= FULL_X_SPAN) {{
+      x0 = FULL_X0;
+      x1 = FULL_X1;
+    }} else {{
+      if (xSpan < MIN_X_SPAN) {{
+        var xMid = (x0 + x1) / 2;
+        xSpan = MIN_X_SPAN;
+        x0 = xMid - xSpan / 2;
+        x1 = xMid + xSpan / 2;
+      }}
+      if (x0 < FULL_X0) {{ x0 = FULL_X0; x1 = FULL_X0 + xSpan; }}
+      if (x1 > FULL_X1) {{ x1 = FULL_X1; x0 = FULL_X1 - xSpan; }}
+    }}
+
+    var ySpan = y1 - y0;
+    if (ySpan >= FULL_Y_SPAN) {{
+      y0 = FULL_Y0;
+      y1 = FULL_Y1;
+    }} else {{
+      if (ySpan < MIN_Y_SPAN) {{
+        var yMid = (y0 + y1) / 2;
+        ySpan = MIN_Y_SPAN;
+        y0 = yMid - ySpan / 2;
+        y1 = yMid + ySpan / 2;
+      }}
+      if (y0 < FULL_Y0) {{ y0 = FULL_Y0; y1 = FULL_Y0 + ySpan; }}
+      if (y1 > FULL_Y1) {{ y1 = FULL_Y1; y0 = FULL_Y1 - ySpan; }}
+    }}
+
+    return {{ x: [x0, x1], y: [y0, y1] }};
+  }}
 
   // =========================================================================
   // [A] PC(노트북) 마우스 드래그: 좌->우 확대 / 우->좌 이전 배율 축소
@@ -111,66 +180,58 @@ custom_interaction_js = """
   var pendingAction = null;
   var lastTouchEnd = 0;
 
-  gd.addEventListener('mousedown', function(e) {
+  gd.addEventListener('mousedown', function(e) {{
     if (Date.now() - lastTouchEnd < 500) return;
     if (e.button !== 0) return;
     startX = e.clientX;
-    var xAuto = gd.layout.xaxis.autorange !== false;
-    var yAuto = gd.layout.yaxis.autorange !== false;
-    if (xAuto && yAuto) {
-      preDragRange = null;
-    } else {
-      preDragRange = {
-        x: gd.layout.xaxis.range ? gd.layout.xaxis.range.slice() : null,
-        y: gd.layout.yaxis.range ? gd.layout.yaxis.range.slice() : null
-      };
-    }
-  }, true);
+    var curX = gd.layout.xaxis.range ? gd.layout.xaxis.range.slice() : [FULL_X0, FULL_X1];
+    var curY = gd.layout.yaxis.range ? gd.layout.yaxis.range.slice() : [FULL_Y0, FULL_Y1];
+    var isFull = (Math.abs(curX[0] - FULL_X0) < 0.1 && Math.abs(curX[1] - FULL_X1) < 0.1);
+    preDragRange = isFull ? null : {{ x: curX, y: curY }};
+  }}, true);
 
-  window.addEventListener('mouseup', function(e) {
+  window.addEventListener('mouseup', function(e) {{
     if (startX === null) return;
     var diff = e.clientX - startX;
     startX = null;
     if (Math.abs(diff) <= 10) return;
 
-    if (diff > 10) {
+    if (diff > 10) {{
       zoomStack.push(preDragRange);
-    } else if (diff < -10) {
+    }} else if (diff < -10) {{
       pendingAction = 'zoomOut';
-    }
-  }, true);
+    }}
+  }}, true);
 
-  gd.on('plotly_relayout', function() {
-    if (pendingAction === 'zoomOut') {
+  gd.on('plotly_relayout', function() {{
+    if (pendingAction === 'zoomOut') {{
       pendingAction = null;
       var prev = zoomStack.pop();
-      if (prev && prev.x && prev.y) {
-        Plotly.relayout(gd, {
+      if (prev && prev.x && prev.y) {{
+        Plotly.relayout(gd, {{
           'xaxis.range': prev.x,
           'yaxis.range': prev.y
-        });
-      } else {
-        Plotly.relayout(gd, {
-          'xaxis.autorange': true,
-          'yaxis.autorange': true
-        });
-      }
-    }
-  });
+        }});
+      }} else {{
+        Plotly.relayout(gd, {{
+          'xaxis.range': [FULL_X0, FULL_X1],
+          'yaxis.range': [FULL_Y0, FULL_Y1]
+        }});
+      }}
+    }}
+  }});
 
-  gd.on('plotly_doubleclick', function() {
+  gd.on('plotly_doubleclick', function() {{
     zoomStack = [];
-  });
+    Plotly.relayout(gd, {{
+      'xaxis.range': [FULL_X0, FULL_X1],
+      'yaxis.range': [FULL_Y0, FULL_Y1]
+    }});
+  }});
 
   // =========================================================================
-  // [B] 스마트폰 터치 제스처:
-  //     - 두 손가락 간격 넓힘 -> 확대 / 좁힘 -> 축소
-  //     - 한 손가락 오른쪽 이동 -> 차트 왼쪽 이동 / 왼쪽 이동 -> 차트 오른쪽 이동
+  // [B] 스마트폰 터치 제스처 (안쪽 봉차트 격자 영역 터치 시에만 작동)
   // =========================================================================
-  gd.style.touchAction = 'none';
-  var plotArea = gd.querySelector('.nsewdrag') || gd;
-  plotArea.style.touchAction = 'none';
-
   var touchMode = null; // 'pan' | 'pinch'
   var moved = false;
   var lastTapTime = 0;
@@ -185,32 +246,58 @@ custom_interaction_js = """
   var rafPending = false;
   var nextLayoutUpdate = null;
 
-  function scheduleRelayout(updateObj) {
+  function scheduleRelayout(updateObj) {{
     nextLayoutUpdate = updateObj;
-    if (!rafPending) {
+    if (!rafPending) {{
       rafPending = true;
-      requestAnimationFrame(function() {
+      requestAnimationFrame(function() {{
         rafPending = false;
-        if (nextLayoutUpdate) {
+        if (nextLayoutUpdate) {{
           Plotly.relayout(gd, nextLayoutUpdate);
           nextLayoutUpdate = null;
-        }
-      });
-    }
-  }
+        }}
+      }});
+    }}
+  }}
 
-  function getPlotMetrics() {
+  function getPlotMetrics() {{
     var full = gd._fullLayout;
     if (!full || !full.xaxis || !full.yaxis || !full._size) return null;
-    return {
+    var rect = gd.getBoundingClientRect();
+    var left = rect.left + full._size.l;
+    var top = rect.top + full._size.t;
+    return {{
       xRange: full.xaxis.range.slice(),
       yRange: full.yaxis.range.slice(),
       size: full._size,
-      rect: gd.getBoundingClientRect()
-    };
-  }
+      rect: rect,
+      plotLeft: left,
+      plotRight: left + full._size.w,
+      plotTop: top,
+      plotBottom: top + full._size.h
+    }};
+  }}
 
-  function initPan(touch) {
+  function isInsidePlotBox(touch, m) {{
+    return (
+      touch.clientX >= m.plotLeft &&
+      touch.clientX <= m.plotRight &&
+      touch.clientY >= m.plotTop &&
+      touch.clientY <= m.plotBottom
+    );
+  }}
+
+  function applyTouchActionPolicy() {{
+    var dragLayer = gd.querySelector('.nsewdrag');
+    if (dragLayer) {{
+      dragLayer.style.touchAction = 'none';
+    }}
+    gd.style.touchAction = 'pan-y';
+  }}
+  applyTouchActionPolicy();
+  gd.on('plotly_afterplot', applyTouchActionPolicy);
+
+  function initPan(touch) {{
     var m = getPlotMetrics();
     if (!m) return;
     touchMode = 'pan';
@@ -218,9 +305,9 @@ custom_interaction_js = """
     panStartY = touch.clientY;
     panInitXRange = m.xRange;
     panInitYRange = m.yRange;
-  }
+  }}
 
-  function initPinch(t1, t2) {
+  function initPinch(t1, t2) {{
     var m = getPlotMetrics();
     if (!m) return;
     touchMode = 'pinch';
@@ -229,35 +316,43 @@ custom_interaction_js = """
 
     var midX = (t1.clientX + t2.clientX) / 2;
     var midY = (t1.clientY + t2.clientY) / 2;
-    var relX = (midX - m.rect.left - m.size.l) / m.size.w;
-    var relY = (midY - m.rect.top - m.size.t) / m.size.h;
+    var relX = (midX - m.plotLeft) / m.size.w;
+    var relY = (midY - m.plotTop) / m.size.h;
 
     pinchInitXSpan = m.xRange[1] - m.xRange[0];
     pinchInitYSpan = m.yRange[1] - m.yRange[0];
     pinchFocalX = m.xRange[0] + relX * pinchInitXSpan;
     pinchFocalY = m.yRange[1] - relY * pinchInitYSpan;
-  }
+  }}
 
-  gd.addEventListener('touchstart', function(e) {
-    if (!e.touches || e.touches.length === 0) return;
-    e.stopPropagation();
-
-    if (e.touches.length === 1) {
-      moved = false;
-      initPan(e.touches[0]);
-    } else if (e.touches.length >= 2) {
-      moved = true;
-      e.preventDefault();
-      initPinch(e.touches[0], e.touches[1]);
-    }
-  }, { passive: false, capture: true });
-
-  gd.addEventListener('touchmove', function(e) {
+  gd.addEventListener('touchstart', function(e) {{
     if (!e.touches || e.touches.length === 0) return;
     var m = getPlotMetrics();
     if (!m) return;
 
-    if (e.touches.length === 1 && touchMode === 'pan') {
+    // 범례나 차트 바깥 여백을 터치한 경우 웹페이지 전체 스크롤이 동작하도록 그대로 통과
+    if (touchMode === null && !isInsidePlotBox(e.touches[0], m)) {{
+      return;
+    }}
+
+    e.stopPropagation();
+
+    if (e.touches.length === 1) {{
+      moved = false;
+      initPan(e.touches[0]);
+    }} else if (e.touches.length >= 2) {{
+      moved = true;
+      e.preventDefault();
+      initPinch(e.touches[0], e.touches[1]);
+    }}
+  }}, {{ passive: false, capture: true }});
+
+  gd.addEventListener('touchmove', function(e) {{
+    if (!touchMode || !e.touches || e.touches.length === 0) return;
+    var m = getPlotMetrics();
+    if (!m) return;
+
+    if (e.touches.length === 1 && touchMode === 'pan') {{
       var t = e.touches[0];
       var dxPx = t.clientX - panStartX;
       var dyPx = t.clientY - panStartY;
@@ -273,20 +368,22 @@ custom_interaction_js = """
       var dxData = (dxPx / m.size.w) * xSpan;
       var dyData = (dyPx / m.size.h) * ySpan;
 
-      var newX0 = panInitXRange[0] - dxData;
-      var newX1 = panInitXRange[1] - dxData;
-      var newY0 = panInitYRange[0] + dyData;
-      var newY1 = panInitYRange[1] + dyData;
+      var clamped = clampRanges(
+        panInitXRange[0] - dxData,
+        panInitXRange[1] - dxData,
+        panInitYRange[0] + dyData,
+        panInitYRange[1] + dyData
+      );
 
-      scheduleRelayout({
-        'xaxis.range': [newX0, newX1],
-        'yaxis.range': [newY0, newY1]
-      });
-    } else if (e.touches.length >= 2) {
-      if (touchMode !== 'pinch') {
+      scheduleRelayout({{
+        'xaxis.range': clamped.x,
+        'yaxis.range': clamped.y
+      }});
+    }} else if (e.touches.length >= 2) {{
+      if (touchMode !== 'pinch') {{
         initPinch(e.touches[0], e.touches[1]);
         return;
-      }
+      }}
       moved = true;
       e.preventDefault();
       e.stopPropagation();
@@ -302,49 +399,52 @@ custom_interaction_js = """
 
       var midX = (t1.clientX + t2.clientX) / 2;
       var midY = (t1.clientY + t2.clientY) / 2;
-      var currRelX = (midX - m.rect.left - m.size.l) / m.size.w;
-      var currRelY = (midY - m.rect.top - m.size.t) / m.size.h;
+      var currRelX = (midX - m.plotLeft) / m.size.w;
+      var currRelY = (midY - m.plotTop) / m.size.h;
 
       var newX0 = pinchFocalX - currRelX * newXSpan;
       var newX1 = newX0 + newXSpan;
       var newY1 = pinchFocalY + currRelY * newYSpan;
       var newY0 = newY1 - newYSpan;
 
-      scheduleRelayout({
-        'xaxis.range': [newX0, newX1],
-        'yaxis.range': [newY0, newY1]
-      });
-    }
-  }, { passive: false, capture: true });
+      var clamped = clampRanges(newX0, newX1, newY0, newY1);
 
-  gd.addEventListener('touchend', function(e) {
+      scheduleRelayout({{
+        'xaxis.range': clamped.x,
+        'yaxis.range': clamped.y
+      }});
+    }}
+  }}, {{ passive: false, capture: true }});
+
+  gd.addEventListener('touchend', function(e) {{
+    if (!touchMode) return;
     lastTouchEnd = Date.now();
     e.stopPropagation();
 
-    if (e.touches.length === 1) {
+    if (e.touches.length === 1) {{
       initPan(e.touches[0]);
-    } else if (e.touches.length === 0) {
-      if (!moved) {
+    }} else if (e.touches.length === 0) {{
+      if (!moved) {{
         var now = Date.now();
-        if (now - lastTapTime < 300) {
+        if (now - lastTapTime < 300) {{
           lastTapTime = 0;
           zoomStack = [];
-          Plotly.relayout(gd, {
-            'xaxis.autorange': true,
-            'yaxis.autorange': true
-          });
-        } else {
+          Plotly.relayout(gd, {{
+            'xaxis.range': [FULL_X0, FULL_X1],
+            'yaxis.range': [FULL_Y0, FULL_Y1]
+          }});
+        }} else {{
           lastTapTime = now;
-        }
-      }
+        }}
+      }}
       touchMode = null;
       moved = false;
-    }
-  }, { passive: false, capture: true });
-})();
+    }}
+  }}, {{ passive: false, capture: true }});
+}})();
 """
 
-# 6. Plotly 봉차트 생성
+# 7. Plotly 봉차트 생성
 price_span = df_all['High'].max() - df_all['Low'].min()
 min_body = price_span * 0.003 if price_span > 0 else 0.01
 open_plot = np.where(
@@ -370,26 +470,26 @@ fig.add_trace(go.Candlestick(
 
 fig.add_trace(go.Scatter(
     x=df_all['Date_Str'], y=df_all['MA20'],
-    mode='lines', name='20일선 (초록)',
+    mode='lines', name='20일선',
     line=dict(color='#2e7d32', width=1.3),
     hoverinfo='skip'
 ))
 fig.add_trace(go.Scatter(
     x=df_all['Date_Str'], y=df_all['MA120'],
-    mode='lines', name='120일선 (주황)',
+    mode='lines', name='120일선',
     line=dict(color='#ff8f00', width=1.4),
     hoverinfo='skip'
 ))
 fig.add_trace(go.Scatter(
     x=df_all['Date_Str'], y=df_all['MA240'],
-    mode='lines', name='240일선 (보라)',
+    mode='lines', name='240일선',
     line=dict(color='#8e24aa', width=1.4),
     hoverinfo='skip'
 ))
 
 fig.add_trace(go.Scatter(
     x=df_all['Date_Str'], y=df_all['Method5_Avg_Price'],
-    mode='lines', name='매매법 5 평균매수가(평단선)',
+    mode='lines', name='평단선',
     line=dict(color='#00838f', width=2.0, dash='dash'),
     hoverinfo='skip'
 ))
@@ -410,18 +510,18 @@ if not buy_days.empty:
         mode='markers',
         marker=dict(
             symbol='triangle-up',
-            size=10,
+            size=9,
             color='#d93025',
             line=dict(color='black', width=0.6)
         ),
-        name=f'{drop_pct:.1f}% 이상 하락 매수 ({len(buy_days)} / {len(df_all)}일)',
+        name=f'-{drop_pct:.1f}% 매수 ({len(buy_days)}/{len(df_all)}일)',
         customdata=custom_data,
         hovertemplate=(
             f"<b>전일대비 {drop_pct:.1f}% 하락 시 매수 (누적 %{{customdata[4]:.0f}}주)</b><br>"
             "매수 날짜: %{customdata[0]}<br>"
             "매수 금액(종가): <b>$%{customdata[1]:.2f}</b><br>"
             "전일 종가 대비 하락률: <b>%{customdata[2]:.2f}%</b><br>"
-            "매매법 5 누적 평단가: $%{customdata[3]:.2f}"
+            "누적 평단가: $%{customdata[3]:.2f}"
             "<extra></extra>"
         )
     ))
@@ -435,20 +535,16 @@ else:
     tick_points = month_starts[month_starts.index.month.isin([1, 7])]
 
 fig.update_layout(
-    title=dict(
-        text=f'<b>{ticker} — 전일대비 {drop_pct:.1f}% 하락 시 매수 ({start_date} ~ {end_date})</b>',
-        font=dict(size=16)
-    ),
-    xaxis_title='날짜',
-    yaxis_title='주가 (USD)',
     autosize=True,
-    height=540,
+    height=500,
     template='plotly_white',
     dragmode='zoom',
     hovermode='closest',
     hoverdistance=15,
     xaxis=dict(
         type='category',
+        range=[full_x0, full_x1],
+        autorange=False,
         rangeslider=dict(visible=False),
         tickmode='array',
         tickvals=tick_points['Date_Str'],
@@ -457,6 +553,9 @@ fig.update_layout(
         gridcolor='rgba(0,0,0,0.08)'
     ),
     yaxis=dict(
+        title='주가 (USD)',
+        range=[full_y0, full_y1],
+        autorange=False,
         showgrid=True,
         gridcolor='rgba(0,0,0,0.08)'
     ),
@@ -465,17 +564,18 @@ fig.update_layout(
         yanchor='bottom',
         y=1.02,
         xanchor='left',
-        x=0
+        x=0,
+        font=dict(size=11)
     ),
-    margin=dict(l=50, r=30, t=75, b=50)
+    margin=dict(l=45, r=12, t=55, b=45)
 )
 
 html_str = pio.to_html(
     fig,
     include_plotlyjs='cdn',
     full_html=False,
-    config={'responsive': True},
+    config={'responsive': True, 'displayModeBar': False},
     post_script=custom_interaction_js
 )
-components.html(html_str, height=560)
-st.caption("💡 PC: 좌→우 드래그 확대 / 우→좌 드래그 축소 | 스마트폰: 두 손가락 벌려 확대·오므려 축소 / 한 손가락 좌우 이동 / 빠르게 두 번 탭 전체 복귀")
+components.html(html_str, height=520)
+st.caption("💡 PC: 좌→우 드래그 확대 / 우→좌 드래그 축소 | 스마트폰: 봉차트 안쪽을 두 손가락으로 벌려 확대·오므려 축소 / 한 손가락 좌우 이동 / 두 번 탭 전체 복귀")
