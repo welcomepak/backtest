@@ -9,6 +9,28 @@ import numpy as np
 from datetime import date, timedelta
 
 st.set_page_config(page_title="미국주식 하락시 매매 백테스팅", layout="wide")
+
+# 모바일 화면 좌우 여백을 줄여 차트 가로 폭을 최대한 확보하는 스타일
+st.markdown(
+    """
+    <style>
+    .block-container {
+        padding-left: 0.7rem !important;
+        padding-right: 0.7rem !important;
+        padding-top: 1.5rem !important;
+    }
+    @media (min-width: 768px) {
+        .block-container {
+            padding-left: 2.5rem !important;
+            padding-right: 2.5rem !important;
+            padding-top: 2rem !important;
+        }
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 st.title("📈 미국주식 하락시 매매 백테스팅")
 
 # 오늘 날짜 및 1년 전 날짜 계산 (윤년 2월 29일 예외 처리 포함)
@@ -404,8 +426,13 @@ if total_buys > 0:
 else:
     m4.metric("평단 대비 현재 수익률", "-")
 
-# 차트 제목을 차트 바깥 영역에 배치 (모바일 글씨 겹침 방지 + 터치 시 페이지 스크롤 허용)
-st.subheader(f"{ticker} — 전일대비 {active_drop:.1f}% 하락 시 매수 ({active_start} ~ {active_end})")
+# 차트 제목 (모바일에서도 잘리지 않도록 반응형 크기 적용)
+st.markdown(
+    f"<h4 style='margin: 0.4rem 0 0.2rem 0; font-size: clamp(1.05rem, 4.2vw, 1.35rem);'>"
+    f"{ticker} — 전일대비 {active_drop:.1f}% 하락 시 매수 ({active_start} ~ {active_end})"
+    f"</h4>",
+    unsafe_allow_html=True,
+)
 
 # 5. 전체 축 범위 고정값 계산 (축소 시 차트가 가운데로 작아지는 현상 방지)
 full_x0 = -0.5
@@ -847,7 +874,7 @@ else:
 
 fig.update_layout(
     autosize=True,
-    height=500,
+    height=530,
     template='plotly_white',
     dragmode='zoom',
     hovermode='closest',
@@ -860,11 +887,14 @@ fig.update_layout(
         tickmode='array',
         tickvals=tick_points['Date_Str'],
         ticktext=tick_points.index.strftime('%Y-%m'),
+        tickfont=dict(size=10),
         showgrid=True,
         gridcolor='rgba(0,0,0,0.08)'
     ),
     yaxis=dict(
-        title='주가 (USD)',
+        title=None,
+        tickprefix='$',
+        tickfont=dict(size=10),
         range=[full_y0, full_y1],
         autorange=False,
         showgrid=True,
@@ -873,12 +903,13 @@ fig.update_layout(
     legend=dict(
         orientation='h',
         yanchor='bottom',
-        y=1.02,
+        y=1.01,
         xanchor='left',
         x=0,
-        font=dict(size=11)
+        font=dict(size=10),
+        itemsizing='constant'
     ),
-    margin=dict(l=45, r=12, t=55, b=45)
+    margin=dict(l=34, r=6, t=48, b=36)
 )
 
 html_str = pio.to_html(
@@ -888,5 +919,5 @@ html_str = pio.to_html(
     config={'responsive': True, 'displayModeBar': False},
     post_script=custom_interaction_js
 )
-components.html(html_str, height=520)
+components.html(html_str, height=545)
 st.caption("💡 PC: 좌→우 드래그 확대 / 우→좌 드래그 축소 | 스마트폰: 봉차트 안쪽을 두 손가락으로 벌려 확대·오므려 축소 / 한 손가락 좌우 이동 / 두 번 탭 전체 복귀")
