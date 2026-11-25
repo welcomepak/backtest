@@ -10,7 +10,7 @@ from datetime import date, timedelta
 
 st.set_page_config(page_title="미국주식 하락시 매매 백테스팅", layout="wide")
 
-# 모바일 화면 좌우 여백을 최소화해 차트 가로 폭을 최대한 확보하는 스타일
+# 모바일 화면 여백 최소화 및 일봉/주봉 전환 버튼 스타일
 st.markdown(
     """
     <style>
@@ -22,6 +22,33 @@ st.markdown(
     iframe {
         width: 100% !important;
         display: block;
+    }
+    /* 일봉 / 주봉 가로 알약 버튼 스타일 */
+    div[data-testid="stRadio"] > div[role="radiogroup"] {
+        display: inline-flex !important;
+        flex-direction: row !important;
+        gap: 6px !important;
+        background-color: #f1f3f5;
+        padding: 4px;
+        border-radius: 8px;
+    }
+    div[data-testid="stRadio"] > div[role="radiogroup"] > label {
+        margin: 0 !important;
+        padding: 4px 14px !important;
+        border-radius: 6px !important;
+        cursor: pointer;
+        font-size: 0.88rem !important;
+        font-weight: 600 !important;
+        background-color: transparent;
+        transition: all 0.15s ease;
+    }
+    div[data-testid="stRadio"] > div[role="radiogroup"] > label:has(input:checked) {
+        background-color: #ffffff !important;
+        color: #d93025 !important;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.14);
+    }
+    div[data-testid="stRadio"] > div[role="radiogroup"] > label > div:first-child {
+        display: none !important;
     }
     @media (min-width: 768px) {
         .block-container {
@@ -288,34 +315,45 @@ US_STOCKS = [
 
 STOCK_OPTIONS = [f"{t} | {kr} ({en})" for t, kr, en in US_STOCKS]
 
-# 실행 확정된 파라미터 상태 초기화 (기본 시작일: 오늘 기준 1년 전)
+# 실행 확정된 파라미터 및 차트 기본 단위 상태 초기화
 if "confirmed_params" not in st.session_state:
     st.session_state.confirmed_params = {
         "ticker": "TQQQ",
         "stock_label": STOCK_OPTIONS[0],
+        "buy_basis": "전일대비",
+        "drop_pct": 3.0,
         "start_date": default_start_date,
         "end_date": today,
-        "drop_pct": 3.0,
     }
 
-# 1. 첫 화면 입력 컨트롤 (검색 드롭다운 + 하락률 + 기간 + 확인 버튼)
-row1_col1, row1_col2 = st.columns([2.4, 1.0])
-with row1_col1:
-    selectbox_kwargs = {}
-    if "accept_new_options" in inspect.signature(st.selectbox).parameters:
-        selectbox_kwargs["accept_new_options"] = True
+if "chart_timeframe" not in st.session_state:
+    st.session_state.chart_timeframe = "일봉"
 
-    selected_option = st.selectbox(
-        "종목 검색 (티커 · 한글명 · 영문명 입력 후 선택)",
-        options=STOCK_OPTIONS,
-        index=0,
-        placeholder="예: 엔비, 테슬, 나스닥, 배당, NVDA, TQQQ...",
-        **selectbox_kwargs
+# 1. 첫 화면 입력 컨트롤
+# Row 1: 종목 검색
+selectbox_kwargs = {}
+if "accept_new_options" in inspect.signature(st.selectbox).parameters:
+    selectbox_kwargs["accept_new_options"] = True
+
+selected_option = st.selectbox(
+    "종목 검색 (티커 · 한글명 · 영문명 입력 후 선택)",
+    options=STOCK_OPTIONS,
+    index=0,
+    placeholder="예: 엔비, 테슬, 나스닥, 배당, NVDA, TQQQ...",
+    **selectbox_kwargs
+)
+
+# Row 2: 매수기준 (전일대비 / 전주대비) + 하락율(%)
+row2_col1, row2_col2 = st.columns([1.0, 1.0])
+with row2_col1:
+    buy_basis = st.selectbox(
+        "매수기준",
+        options=["전일대비", "전주대비"],
+        index=0
     )
-
-with row1_col2:
+with row2_col2:
     drop_pct = st.number_input(
-        "매수 기준 (전일 대비 하락률 %)",
+        "하락율(%)",
         min_value=0.1,
         max_value=50.0,
         value=3.0,
@@ -323,12 +361,13 @@ with row1_col2:
         format="%.1f"
     )
 
-row2_col1, row2_col2, row2_col3 = st.columns([1.3, 1.3, 0.8])
-with row2_col1:
+# Row 3: 시작일 + 종료일 + 확인 버튼
+row3_col1, row3_col2, row3_col3 = st.columns([1.3, 1.3, 0.8])
+with row3_col1:
     start_date = st.date_input("백테스팅 시작일", value=default_start_date)
-with row2_col2:
+with row3_col2:
     end_date = st.date_input("백테스팅 종료일", value=today)
-with row2_col3:
+with row3_col3:
     st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
     run_clicked = st.button("확인", type="primary", use_container_width=True)
 
@@ -336,7 +375,7 @@ with row2_col3:
 raw_selected = (selected_option or "TQQQ").strip()
 input_ticker = raw_selected.split("|")[0].strip().upper()
 
-# [확인] 버튼을 눌렀을 때만 실행 파라미터 갱신
+# [확인] 버튼을 눌렀을 때만 실행 파라미터 및 차트 기본 단위(전일대비->일봉, 전주대비->주봉) 갱신
 if run_clicked:
     if not input_ticker:
         st.warning("종목 또는 티커를 선택해 주세요.")
@@ -346,30 +385,34 @@ if run_clicked:
         st.session_state.confirmed_params = {
             "ticker": input_ticker,
             "stock_label": raw_selected,
+            "buy_basis": buy_basis,
+            "drop_pct": float(drop_pct),
             "start_date": start_date,
             "end_date": end_date,
-            "drop_pct": float(drop_pct),
         }
+        st.session_state.chart_timeframe = "주봉" if buy_basis == "전주대비" else "일봉"
 
 cp = st.session_state.confirmed_params
 is_changed = (
     input_ticker != cp["ticker"]
+    or buy_basis != cp["buy_basis"]
+    or round(float(drop_pct), 2) != round(cp["drop_pct"], 2)
     or start_date != cp["start_date"]
     or end_date != cp["end_date"]
-    or round(float(drop_pct), 2) != round(cp["drop_pct"], 2)
 )
 if is_changed:
     st.info("입력 조건이 변경되었습니다. **[확인]** 버튼을 누르면 새 조건으로 백테스팅이 실행됩니다.")
 
 ticker = cp["ticker"]
+active_basis = cp["buy_basis"]
+active_drop = cp["drop_pct"]
 active_start = cp["start_date"]
 active_end = cp["end_date"]
-active_drop = cp["drop_pct"]
 
-# 2. 주가 데이터 다운로드 함수 (1시간 주기 캐싱으로 최신 주가 자동 반영)
+# 2. 주가 데이터 다운로드 함수 (240주선 연속성까지 확보하기 위해 약 5년 전부터 수집)
 @st.cache_data(ttl=3600, show_spinner="주가 데이터를 불러오는 중입니다...")
 def load_stock_data(symbol: str, start: date, end: date) -> pd.DataFrame:
-    warmup_start = start - timedelta(days=400)
+    warmup_start = start - timedelta(days=1850)
     raw_df = yf.download(
         symbol,
         start=warmup_start.strftime("%Y-%m-%d"),
@@ -389,79 +432,180 @@ if df.empty:
     st.error(f"'{ticker}' 데이터를 불러올 수 없습니다. 정확한 미국 주식/ETF 티커인지 확인해 주세요.")
     st.stop()
 
-# 3. 이동평균선(20일, 120일, 240일) 및 매수 시그널 계산
-df['MA20'] = df['Close'].rolling(window=20).mean()
-df['MA120'] = df['Close'].rolling(window=120).mean()
-df['MA240'] = df['Close'].rolling(window=240).mean()
-
-df['Prev_Close'] = df['Close'].shift(1)
-df['Pct_Change'] = ((df['Close'] - df['Prev_Close']) / df['Prev_Close']) * 100
-df['Buy_Signal'] = df['Pct_Change'] <= -abs(active_drop)
-
-df_all = df[(df.index.date >= active_start) & (df.index.date <= active_end)].copy()
-if df_all.empty:
+# 종료일까지의 데이터만 사용
+df = df[df.index.date <= active_end].copy()
+if df.empty:
     st.warning("선택하신 기간에 해당하는 거래일 데이터가 없습니다.")
     st.stop()
 
-df_all['Date_Str'] = df_all.index.strftime('%Y-%m-%d')
+# 3. 일봉 및 주봉 데이터 프레임 구축 (주봉은 해당 주 마지막 영업일 종가 기준)
+df['Week_Period'] = df.index.to_period('W')
+df['Date_Str'] = df.index.strftime('%Y-%m-%d')
 
-# 누적 평균매수단가선(평단선) 계산
-df_all['Buy_Price'] = np.where(df_all['Buy_Signal'], df_all['Close'], np.nan)
-df_all['Cum_Buy_Count'] = df_all['Buy_Signal'].cumsum()
-df_all['Cum_Buy_Sum'] = df_all['Buy_Price'].fillna(0).cumsum()
-df_all['Method5_Avg_Price'] = np.where(
-    df_all['Cum_Buy_Count'] > 0,
-    df_all['Cum_Buy_Sum'] / df_all['Cum_Buy_Count'],
-    np.nan
+# 일봉 이동평균선 (20일, 120일, 240일)
+df['MA20'] = df['Close'].rolling(window=20).mean()
+df['MA120'] = df['Close'].rolling(window=120).mean()
+df['MA240'] = df['Close'].rolling(window=240).mean()
+df['Prev_Close'] = df['Close'].shift(1)
+df['Daily_Pct_Change'] = ((df['Close'] - df['Prev_Close']) / df['Prev_Close']) * 100
+
+# 주봉 집계 (월~일 기준 각 주의 첫 시가, 최고가, 최저가, 마지막 영업일 종가 및 날짜)
+df_with_date = df.copy()
+df_with_date['Trade_Date'] = df_with_date.index
+weekly_full = df_with_date.groupby('Week_Period').agg(
+    Open=('Open', 'first'),
+    High=('High', 'max'),
+    Low=('Low', 'min'),
+    Close=('Close', 'last'),
+    Last_Date=('Trade_Date', 'last'),
 )
+weekly_full['Date_Str'] = weekly_full['Last_Date'].dt.strftime('%Y-%m-%d')
+weekly_full['MA20'] = weekly_full['Close'].rolling(window=20).mean()
+weekly_full['MA120'] = weekly_full['Close'].rolling(window=120).mean()
+weekly_full['MA240'] = weekly_full['Close'].rolling(window=240).mean()
+weekly_full['Prev_Week_Close'] = weekly_full['Close'].shift(1)
+weekly_full['Weekly_Pct_Change'] = ((weekly_full['Close'] - weekly_full['Prev_Week_Close']) / weekly_full['Prev_Week_Close']) * 100
 
-# 4. 상단 핵심 요약 지표 카드
-total_buys = int(df_all['Cum_Buy_Count'].iloc[-1])
-last_close = float(df_all['Close'].iloc[-1])
-final_avg_price = float(df_all['Method5_Avg_Price'].iloc[-1]) if total_buys > 0 else np.nan
+# 4. 매수기준(전일대비 vs 전주대비)에 따른 매수 시그널 및 누적 평단가 계산
+df_period = df[(df.index.date >= active_start) & (df.index.date <= active_end)].copy()
+weekly_period = weekly_full[
+    (weekly_full['Last_Date'].dt.date >= active_start) & (weekly_full['Last_Date'].dt.date <= active_end)
+].copy()
 
+if df_period.empty or weekly_period.empty:
+    st.warning("선택하신 기간에 해당하는 거래일 데이터가 없습니다.")
+    st.stop()
+
+if active_basis == "전일대비":
+    # 일별 매수 판정
+    df_period['Buy_Signal'] = df_period['Daily_Pct_Change'] <= -abs(active_drop)
+    df_period['Buy_Price'] = np.where(df_period['Buy_Signal'], df_period['Close'], np.nan)
+    df_period['Cum_Buy_Count'] = df_period['Buy_Signal'].cumsum()
+    df_period['Cum_Buy_Sum'] = df_period['Buy_Price'].fillna(0).cumsum()
+    df_period['Avg_Price'] = np.where(
+        df_period['Cum_Buy_Count'] > 0,
+        df_period['Cum_Buy_Sum'] / df_period['Cum_Buy_Count'],
+        np.nan
+    )
+
+    # 주봉 표시용 집계: 한 주에 여러 번 매수했을 경우 주당 평균 매수가 및 주간 매수 수량 계산
+    week_buy_stats = df_period.groupby('Week_Period').agg(
+        Week_Buy_Count=('Buy_Signal', 'sum'),
+        Week_Buy_Sum=('Buy_Price', 'sum'),
+    )
+    weekly_period = weekly_period.join(week_buy_stats)
+    weekly_period['Week_Buy_Count'] = weekly_period['Week_Buy_Count'].fillna(0).astype(int)
+    weekly_period['Week_Buy_Sum'] = weekly_period['Week_Buy_Sum'].fillna(0.0)
+    weekly_period['Buy_Signal'] = weekly_period['Week_Buy_Count'] > 0
+    weekly_period['Week_Avg_Buy_Price'] = np.where(
+        weekly_period['Buy_Signal'],
+        weekly_period['Week_Buy_Sum'] / weekly_period['Week_Buy_Count'],
+        np.nan
+    )
+    weekly_period['Cum_Buy_Count'] = weekly_period['Week_Buy_Count'].cumsum()
+    weekly_period['Cum_Buy_Sum'] = weekly_period['Week_Buy_Sum'].cumsum()
+    weekly_period['Avg_Price'] = np.where(
+        weekly_period['Cum_Buy_Count'] > 0,
+        weekly_period['Cum_Buy_Sum'] / weekly_period['Cum_Buy_Count'],
+        np.nan
+    )
+
+    total_buys = int(df_period['Cum_Buy_Count'].iloc[-1])
+    final_avg_price = float(df_period['Avg_Price'].iloc[-1]) if total_buys > 0 else np.nan
+    total_units_label = f"전체 {len(df_period)}거래일 중"
+else:
+    # 전주대비 매수 판정 (주 마지막 영업일 종가 비교)
+    weekly_period['Buy_Signal'] = weekly_period['Weekly_Pct_Change'] <= -abs(active_drop)
+    weekly_period['Week_Buy_Count'] = weekly_period['Buy_Signal'].astype(int)
+    weekly_period['Week_Avg_Buy_Price'] = np.where(weekly_period['Buy_Signal'], weekly_period['Close'], np.nan)
+    weekly_period['Cum_Buy_Count'] = weekly_period['Buy_Signal'].cumsum()
+    weekly_period['Cum_Buy_Sum'] = weekly_period['Week_Avg_Buy_Price'].fillna(0).cumsum()
+    weekly_period['Avg_Price'] = np.where(
+        weekly_period['Cum_Buy_Count'] > 0,
+        weekly_period['Cum_Buy_Sum'] / weekly_period['Cum_Buy_Count'],
+        np.nan
+    )
+
+    # 일봉 차트 전환 시에도 해당 주의 마지막 영업일에 매수 표시가 되도록 매핑
+    buy_dates_map = dict(
+        zip(
+            weekly_period.loc[weekly_period['Buy_Signal'], 'Last_Date'],
+            weekly_period.loc[weekly_period['Buy_Signal'], 'Close']
+        )
+    )
+    pct_dates_map = dict(zip(weekly_period['Last_Date'], weekly_period['Weekly_Pct_Change']))
+
+    df_period['Buy_Signal'] = df_period.index.isin(buy_dates_map.keys())
+    df_period['Buy_Price'] = df_period.index.map(buy_dates_map).astype(float)
+    df_period['Weekly_Pct_On_Day'] = df_period.index.map(pct_dates_map).astype(float)
+    df_period['Cum_Buy_Count'] = df_period['Buy_Signal'].cumsum()
+    df_period['Cum_Buy_Sum'] = df_period['Buy_Price'].fillna(0).cumsum()
+    df_period['Avg_Price'] = np.where(
+        df_period['Cum_Buy_Count'] > 0,
+        df_period['Cum_Buy_Sum'] / df_period['Cum_Buy_Count'],
+        np.nan
+    )
+
+    total_buys = int(weekly_period['Cum_Buy_Count'].iloc[-1])
+    final_avg_price = float(weekly_period['Avg_Price'].iloc[-1]) if total_buys > 0 else np.nan
+    total_units_label = f"전체 {len(weekly_period)}주 중"
+
+# 5. 상단 핵심 요약 지표 카드
+last_close = float(df_period['Close'].iloc[-1])
 m1, m2, m3, m4 = st.columns(4)
-m1.metric("총 매수 횟수 (누적 수량)", f"{total_buys}회 ({total_buys}주)", f"전체 {len(df_all)}거래일 중")
+m1.metric("총 매수 횟수 (누적 수량)", f"{total_buys}회 ({total_buys}주)", total_units_label)
 m2.metric("최종 누적 평단가", f"${final_avg_price:.2f}" if total_buys > 0 else "-")
-m3.metric(f"{df_all['Date_Str'].iloc[-1]} 종가", f"${last_close:.2f}")
+m3.metric(f"{df_period['Date_Str'].iloc[-1]} 종가", f"${last_close:.2f}")
 if total_buys > 0:
     profit_pct = ((last_close - final_avg_price) / final_avg_price) * 100
     m4.metric("평단 대비 현재 수익률", f"{profit_pct:+.2f}%", f"${last_close - final_avg_price:+.2f}")
 else:
     m4.metric("평단 대비 현재 수익률", "-")
 
-# 차트 제목 (모바일에서도 잘리지 않도록 반응형 크기 적용)
+# 6. 차트 제목 및 차트 위쪽 [일봉 / 주봉] 선택 버튼
 st.markdown(
-    f"<h4 style='margin: 0.4rem 0 0.2rem 0; font-size: clamp(1.0rem, 4.0vw, 1.35rem);'>"
-    f"{ticker} — 전일대비 {active_drop:.1f}% 하락 시 매수 ({active_start} ~ {active_end})"
+    f"<h4 style='margin: 0.4rem 0 0.25rem 0; font-size: clamp(1.0rem, 4.0vw, 1.35rem);'>"
+    f"{ticker} — {active_basis} {active_drop:.1f}% 하락 시 매수 ({active_start} ~ {active_end})"
     f"</h4>",
     unsafe_allow_html=True,
 )
 
-# 5. 전체 축 범위 고정값 계산 (안쪽 Y축 눈금과 첫 봉이 겹치지 않도록 좌측 미세 여백 포함)
-left_pad_candles = max(1.5, float(len(df_all)) * 0.035)
+selected_tf = st.radio(
+    "차트 봉 단위",
+    options=["일봉", "주봉"],
+    key="chart_timeframe",
+    horizontal=True,
+    label_visibility="collapsed"
+)
+
+is_weekly_chart = (selected_tf == "주봉")
+plot_df = weekly_period.copy() if is_weekly_chart else df_period.copy()
+
+# 7. 전체 축 범위 고정값 계산 (안쪽 Y축 눈금과 첫 봉이 겹치지 않도록 좌측 미세 여백 포함)
+left_pad_candles = max(1.2, float(len(plot_df)) * 0.035)
 full_x0 = -left_pad_candles
-full_x1 = float(len(df_all)) - 0.5
+full_x1 = float(len(plot_df)) - 0.5
 
-y_candidates_low = [df_all['Low'].min()]
-if not df_all['Buy_Signal'].empty and df_all['Buy_Signal'].any():
-    y_candidates_low.append((df_all.loc[df_all['Buy_Signal'], 'Low'] * 0.96).min())
-for ma_col in ['MA20', 'MA120', 'MA240', 'Method5_Avg_Price']:
-    if df_all[ma_col].notna().any():
-        y_candidates_low.append(df_all[ma_col].min())
+y_candidates_low = [plot_df['Low'].min()]
+y_candidates_high = [plot_df['High'].max()]
 
-y_candidates_high = [df_all['High'].max()]
-for ma_col in ['MA20', 'MA120', 'MA240', 'Method5_Avg_Price']:
-    if df_all[ma_col].notna().any():
-        y_candidates_high.append(df_all[ma_col].max())
+for ma_col in ['MA20', 'MA120', 'MA240', 'Avg_Price']:
+    if plot_df[ma_col].notna().any():
+        y_candidates_low.append(plot_df[ma_col].min())
+        y_candidates_high.append(plot_df[ma_col].max())
+
+buy_price_col = 'Week_Avg_Buy_Price' if is_weekly_chart else 'Buy_Price'
+if plot_df[buy_price_col].notna().any():
+    y_candidates_low.append(plot_df[buy_price_col].min())
+    y_candidates_high.append(plot_df[buy_price_col].max())
 
 y_min_val = float(min(y_candidates_low))
 y_max_val = float(max(y_candidates_high))
-y_pad = (y_max_val - y_min_val) * 0.05 if y_max_val > y_min_val else 1.0
+y_pad = (y_max_val - y_min_val) * 0.06 if y_max_val > y_min_val else 1.0
 full_y0 = max(0.0, y_min_val - y_pad)
 full_y1 = y_max_val + y_pad
 
-# 6. PC(마우스) + 스마트폰(터치 핀치/스와이프 + 경계 고정) 통합 제어 자바스크립트
+# 8. PC(마우스) + 스마트폰(터치 핀치/스와이프 + 경계 고정) 통합 제어 자바스크립트
 custom_interaction_js = """
 (function() {
   var gd = document.getElementById('{plot_id}');
@@ -787,69 +931,141 @@ custom_interaction_js = (
     .replace("__FULL_Y1__", str(full_y1))
 )
 
-# 7. Plotly 봉차트 생성
-price_span = df_all['High'].max() - df_all['Low'].min()
+# 9. Plotly 봉차트 생성 (일봉 / 주봉 동적 전환)
+price_span = plot_df['High'].max() - plot_df['Low'].min()
 min_body = price_span * 0.003 if price_span > 0 else 0.01
 open_plot = np.where(
-    np.abs(df_all['Close'] - df_all['Open']) < min_body,
-    np.where(df_all['Close'] >= df_all['Open'], df_all['Close'] - min_body, df_all['Close'] + min_body),
-    df_all['Open']
+    np.abs(plot_df['Close'] - plot_df['Open']) < min_body,
+    np.where(plot_df['Close'] >= plot_df['Open'], plot_df['Close'] - min_body, plot_df['Close'] + min_body),
+    plot_df['Open']
 )
+
+ma_unit = "주선" if is_weekly_chart else "일선"
+candle_label = f"{ticker} 주봉" if is_weekly_chart else f"{ticker} 일봉"
 
 fig = go.Figure()
 
 fig.add_trace(go.Candlestick(
-    x=df_all['Date_Str'],
+    x=plot_df['Date_Str'],
     open=open_plot,
-    high=df_all['High'],
-    low=df_all['Low'],
-    close=df_all['Close'],
+    high=plot_df['High'],
+    low=plot_df['Low'],
+    close=plot_df['Close'],
     increasing=dict(line=dict(color='#e53935', width=1.4), fillcolor='#e53935'),
     decreasing=dict(line=dict(color='#1e88e5', width=1.4), fillcolor='#1e88e5'),
     whiskerwidth=0.8,
-    name=f'{ticker} 일봉',
+    name=candle_label,
     hoverinfo='skip'
 ))
 
 fig.add_trace(go.Scatter(
-    x=df_all['Date_Str'], y=df_all['MA20'],
-    mode='lines', name='20일선',
+    x=plot_df['Date_Str'], y=plot_df['MA20'],
+    mode='lines', name=f'20{ma_unit}',
     line=dict(color='#2e7d32', width=1.3),
     hoverinfo='skip'
 ))
 fig.add_trace(go.Scatter(
-    x=df_all['Date_Str'], y=df_all['MA120'],
-    mode='lines', name='120일선',
+    x=plot_df['Date_Str'], y=plot_df['MA120'],
+    mode='lines', name=f'120{ma_unit}',
     line=dict(color='#ff8f00', width=1.4),
     hoverinfo='skip'
 ))
 fig.add_trace(go.Scatter(
-    x=df_all['Date_Str'], y=df_all['MA240'],
-    mode='lines', name='240일선',
+    x=plot_df['Date_Str'], y=plot_df['MA240'],
+    mode='lines', name=f'240{ma_unit}',
     line=dict(color='#8e24aa', width=1.4),
     hoverinfo='skip'
 ))
 
 fig.add_trace(go.Scatter(
-    x=df_all['Date_Str'], y=df_all['Method5_Avg_Price'],
+    x=plot_df['Date_Str'], y=plot_df['Avg_Price'],
     mode='lines', name='평단선',
     line=dict(color='#00838f', width=2.0, dash='dash'),
     hoverinfo='skip'
 ))
 
-buy_days = df_all[df_all['Buy_Signal']].copy()
-if not buy_days.empty:
-    custom_data = np.stack([
-        buy_days['Date_Str'],
-        buy_days['Close'],
-        buy_days['Pct_Change'],
-        buy_days['Method5_Avg_Price'],
-        buy_days['Cum_Buy_Count']
-    ], axis=-1)
+# 매수 시그널 빨간 삼각형 (위쪽 꼭지점이 매수 금액에 맞도록 y 위치를 보정)
+buy_points = plot_df[plot_df['Buy_Signal']].copy()
+if not buy_points.empty:
+    # 차트 세로 높이(540px) 대비 삼각형 반높이(~5.5px)만큼 아래로 배치해 위 꼭지점이 매수가에 닿게 설정
+    y_data_span = full_y1 - full_y0
+    tip_offset = y_data_span * (5.5 / 470.0)
+
+    if is_weekly_chart:
+        y_marker = buy_points['Week_Avg_Buy_Price'] - tip_offset
+        if active_basis == "전일대비":
+            custom_data = np.stack([
+                buy_points['Date_Str'],
+                buy_points['Week_Avg_Buy_Price'],
+                buy_points['Week_Buy_Count'],
+                buy_points['Avg_Price'],
+                buy_points['Cum_Buy_Count'],
+            ], axis=-1)
+            hover_tpl = (
+                f"<b>전일대비 {active_drop:.1f}% 하락 주간 매수 (누적 %{{customdata[4]:.0f}}주)</b><br>"
+                "주간 기준일(마지막 영업일): %{customdata[0]}<br>"
+                "해당 주 매수 수량: <b>%{customdata[2]:.0f}주</b><br>"
+                "해당 주 평균 매수가: <b>$%{customdata[1]:.2f}</b><br>"
+                "전체 누적 평단가: $%{customdata[3]:.2f}"
+                "<extra></extra>"
+            )
+            legend_name = f'-{active_drop:.1f}% 매수 ({len(buy_points)}주간 / 총 {total_buys}주)'
+        else:
+            custom_data = np.stack([
+                buy_points['Date_Str'],
+                buy_points['Week_Avg_Buy_Price'],
+                buy_points['Weekly_Pct_Change'],
+                buy_points['Avg_Price'],
+                buy_points['Cum_Buy_Count'],
+            ], axis=-1)
+            hover_tpl = (
+                f"<b>전주대비 {active_drop:.1f}% 하락 시 매수 (누적 %{{customdata[4]:.0f}}주)</b><br>"
+                "매수 날짜(주 마지막 영업일): %{customdata[0]}<br>"
+                "매수 금액(주간 종가): <b>$%{customdata[1]:.2f}</b><br>"
+                "전주 종가 대비 하락률: <b>%{customdata[2]:.2f}%</b><br>"
+                "누적 평단가: $%{customdata[3]:.2f}"
+                "<extra></extra>"
+            )
+            legend_name = f'-{active_drop:.1f}% 매수 ({len(buy_points)}/{len(plot_df)}주)'
+    else:
+        y_marker = buy_points['Buy_Price'] - tip_offset
+        if active_basis == "전일대비":
+            custom_data = np.stack([
+                buy_points['Date_Str'],
+                buy_points['Buy_Price'],
+                buy_points['Daily_Pct_Change'],
+                buy_points['Avg_Price'],
+                buy_points['Cum_Buy_Count'],
+            ], axis=-1)
+            hover_tpl = (
+                f"<b>전일대비 {active_drop:.1f}% 하락 시 매수 (누적 %{{customdata[4]:.0f}}주)</b><br>"
+                "매수 날짜: %{customdata[0]}<br>"
+                "매수 금액(종가): <b>$%{customdata[1]:.2f}</b><br>"
+                "전일 종가 대비 하락률: <b>%{customdata[2]:.2f}%</b><br>"
+                "누적 평단가: $%{customdata[3]:.2f}"
+                "<extra></extra>"
+            )
+        else:
+            custom_data = np.stack([
+                buy_points['Date_Str'],
+                buy_points['Buy_Price'],
+                buy_points['Weekly_Pct_On_Day'],
+                buy_points['Avg_Price'],
+                buy_points['Cum_Buy_Count'],
+            ], axis=-1)
+            hover_tpl = (
+                f"<b>전주대비 {active_drop:.1f}% 하락 시 매수 (누적 %{{customdata[4]:.0f}}주)</b><br>"
+                "매수 날짜(주 마지막 영업일): %{customdata[0]}<br>"
+                "매수 금액(종가): <b>$%{customdata[1]:.2f}</b><br>"
+                "전주 종가 대비 하락률: <b>%{customdata[2]:.2f}%</b><br>"
+                "누적 평단가: $%{customdata[3]:.2f}"
+                "<extra></extra>"
+            )
+        legend_name = f'-{active_drop:.1f}% 매수 ({len(buy_points)}/{len(plot_df)}일)'
 
     fig.add_trace(go.Scatter(
-        x=buy_days['Date_Str'],
-        y=buy_days['Low'] * 0.96,
+        x=buy_points['Date_Str'],
+        y=y_marker,
         mode='markers',
         marker=dict(
             symbol='triangle-up',
@@ -857,25 +1073,34 @@ if not buy_days.empty:
             color='#d93025',
             line=dict(color='black', width=0.6)
         ),
-        name=f'-{active_drop:.1f}% 매수 ({len(buy_days)}/{len(df_all)}일)',
+        name=legend_name,
         customdata=custom_data,
-        hovertemplate=(
-            f"<b>전일대비 {active_drop:.1f}% 하락 시 매수 (누적 %{{customdata[4]:.0f}}주)</b><br>"
-            "매수 날짜: %{customdata[0]}<br>"
-            "매수 금액(종가): <b>$%{customdata[1]:.2f}</b><br>"
-            "전일 종가 대비 하락률: <b>%{customdata[2]:.2f}%</b><br>"
-            "누적 평단가: $%{customdata[3]:.2f}"
-            "<extra></extra>"
-        )
+        hovertemplate=hover_tpl
     ))
 
-month_starts = df_all.groupby(df_all.index.to_period('M')).head(1)
-if len(df_all) <= 130:
-    tick_points = month_starts
-elif len(df_all) <= 400:
-    tick_points = month_starts[month_starts.index.month.isin([1, 4, 7, 10])]
+# X축 날짜 눈금 간격 자동 조정
+dt_index = pd.to_datetime(plot_df['Date_Str'])
+month_starts = plot_df.groupby(dt_index.to_period('M')).head(1)
+month_starts_dt = pd.to_datetime(month_starts['Date_Str'])
+
+if is_weekly_chart:
+    if len(plot_df) <= 30:
+        tick_points = month_starts
+    elif len(plot_df) <= 110:
+        tick_points = month_starts[month_starts_dt.dt.month.isin([1, 4, 7, 10])]
+    elif len(plot_df) <= 280:
+        tick_points = month_starts[month_starts_dt.dt.month.isin([1, 7])]
+    else:
+        tick_points = month_starts[month_starts_dt.dt.month == 1]
 else:
-    tick_points = month_starts[month_starts.index.month.isin([1, 7])]
+    if len(plot_df) <= 130:
+        tick_points = month_starts
+    elif len(plot_df) <= 400:
+        tick_points = month_starts[month_starts_dt.dt.month.isin([1, 4, 7, 10])]
+    elif len(plot_df) <= 1000:
+        tick_points = month_starts[month_starts_dt.dt.month.isin([1, 7])]
+    else:
+        tick_points = month_starts[month_starts_dt.dt.month == 1]
 
 fig.update_layout(
     autosize=True,
@@ -892,7 +1117,7 @@ fig.update_layout(
         rangeslider=dict(visible=False),
         tickmode='array',
         tickvals=tick_points['Date_Str'],
-        ticktext=tick_points.index.strftime('%Y-%m'),
+        ticktext=pd.to_datetime(tick_points['Date_Str']).dt.strftime('%Y-%m'),
         tickfont=dict(size=10),
         showgrid=True,
         gridcolor='rgba(0,0,0,0.08)'
@@ -920,7 +1145,6 @@ fig.update_layout(
     margin=dict(l=4, r=4, t=46, b=28)
 )
 
-# iframe 기본 여백(8px)까지 완전히 제거해 좌우 끝까지 꽉 차게 렌더링
 iframe_reset_css = "<style>html, body { margin: 0 !important; padding: 0 !important; width: 100% !important; overflow-x: hidden; }</style>"
 html_str = iframe_reset_css + pio.to_html(
     fig,
