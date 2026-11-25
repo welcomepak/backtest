@@ -424,7 +424,9 @@ def load_stock_data(symbol: str, start: date, end: date) -> pd.DataFrame:
         return pd.DataFrame()
     if isinstance(raw_df.columns, pd.MultiIndex):
         raw_df = raw_df.xs(symbol, level=1, axis=1)
-    return raw_df.dropna(subset=['Open', 'High', 'Low', 'Close']).copy()
+    raw_df = raw_df.dropna(subset=['Open', 'High', 'Low', 'Close']).copy()
+    raw_df = raw_df[~raw_df.index.duplicated(keep='last')].sort_index()
+    return raw_df
 
 df = load_stock_data(ticker, active_start, active_end)
 
@@ -432,7 +434,8 @@ if df.empty:
     st.error(f"'{ticker}' 데이터를 불러올 수 없습니다. 정확한 미국 주식/ETF 티커인지 확인해 주세요.")
     st.stop()
 
-# 종료일까지의 데이터만 사용
+# 중복 날짜 제거 및 종료일까지의 데이터만 사용
+df = df[~df.index.duplicated(keep='last')].sort_index()
 df = df[df.index.date <= active_end].copy()
 if df.empty:
     st.warning("선택하신 기간에 해당하는 거래일 데이터가 없습니다.")
@@ -579,7 +582,7 @@ selected_tf = st.radio(
 )
 
 is_weekly_chart = (selected_tf == "주봉")
-plot_df = weekly_period.copy() if is_weekly_chart else df_period.copy()
+plot_df = (weekly_period if is_weekly_chart else df_period).reset_index(drop=True)
 
 # 7. 전체 축 범위 고정값 계산 (안쪽 Y축 눈금과 첫 봉이 겹치지 않도록 좌측 미세 여백 포함)
 left_pad_candles = max(1.2, float(len(plot_df)) * 0.035)
@@ -987,7 +990,6 @@ fig.add_trace(go.Scatter(
 # 매수 시그널 빨간 삼각형 (위쪽 꼭지점이 매수 금액에 맞도록 y 위치를 보정)
 buy_points = plot_df[plot_df['Buy_Signal']].copy()
 if not buy_points.empty:
-    # 차트 세로 높이(540px) 대비 삼각형 반높이(~5.5px)만큼 아래로 배치해 위 꼭지점이 매수가에 닿게 설정
     y_data_span = full_y1 - full_y0
     tip_offset = y_data_span * (5.5 / 470.0)
 
@@ -1078,29 +1080,29 @@ if not buy_points.empty:
         hovertemplate=hover_tpl
     ))
 
-# X축 날짜 눈금 간격 자동 조정
-dt_index = pd.to_datetime(plot_df['Date_Str'])
-month_starts = plot_df.groupby(dt_index.to_period('M')).head(1)
-month_starts_dt = pd.to_datetime(month_starts['Date_Str'])
+# X축 날짜 눈금 간격 자동 조정 (중복 인덱스 영향이 없는 문자열 기반 추출)
+plot_df['YM'] = plot_df['Date_Str'].str.slice(0, 7)
+month_starts = plot_df.drop_duplicates(subset=['YM'], keep='first')
+month_nums = month_starts['YM'].str.slice(5, 7).astype(int)
 
 if is_weekly_chart:
     if len(plot_df) <= 30:
         tick_points = month_starts
     elif len(plot_df) <= 110:
-        tick_points = month_starts[month_starts_dt.dt.month.isin([1, 4, 7, 10])]
+        tick_points = month_starts[month_nums.isin([1, 4, 7, 10])]
     elif len(plot_df) <= 280:
-        tick_points = month_starts[month_starts_dt.dt.month.isin([1, 7])]
+        tick_points = month_starts[month_nums.isin([1, 7])]
     else:
-        tick_points = month_starts[month_starts_dt.dt.month == 1]
+        tick_points = month_starts[month_nums == 1]
 else:
     if len(plot_df) <= 130:
         tick_points = month_starts
     elif len(plot_df) <= 400:
-        tick_points = month_starts[month_starts_dt.dt.month.isin([1, 4, 7, 10])]
+        tick_points = month_starts[month_nums.isin([1, 4, 7, 10])]
     elif len(plot_df) <= 1000:
-        tick_points = month_starts[month_starts_dt.dt.month.isin([1, 7])]
+        tick_points = month_starts[month_nums.isin([1, 7])]
     else:
-        tick_points = month_starts[month_starts_dt.dt.month == 1]
+        tick_points = month_starts[month_nums == 1]
 
 fig.update_layout(
     autosize=True,
@@ -1117,7 +1119,7 @@ fig.update_layout(
         rangeslider=dict(visible=False),
         tickmode='array',
         tickvals=tick_points['Date_Str'],
-        ticktext=pd.to_datetime(tick_points['Date_Str']).dt.strftime('%Y-%m'),
+        ticktext=tick_points['YM'],
         tickfont=dict(size=10),
         showgrid=True,
         gridcolor='rgba(0,0,0,0.08)'
