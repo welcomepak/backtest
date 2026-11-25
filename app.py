@@ -10,14 +10,18 @@ from datetime import date, timedelta
 
 st.set_page_config(page_title="미국주식 하락시 매매 백테스팅", layout="wide")
 
-# 모바일 화면 좌우 여백을 줄여 차트 가로 폭을 최대한 확보하는 스타일
+# 모바일 화면 좌우 여백을 최소화해 차트 가로 폭을 최대한 확보하는 스타일
 st.markdown(
     """
     <style>
     .block-container {
-        padding-left: 0.7rem !important;
-        padding-right: 0.7rem !important;
-        padding-top: 1.5rem !important;
+        padding-left: 0.25rem !important;
+        padding-right: 0.25rem !important;
+        padding-top: 1.4rem !important;
+    }
+    iframe {
+        width: 100% !important;
+        display: block;
     }
     @media (min-width: 768px) {
         .block-container {
@@ -428,14 +432,15 @@ else:
 
 # 차트 제목 (모바일에서도 잘리지 않도록 반응형 크기 적용)
 st.markdown(
-    f"<h4 style='margin: 0.4rem 0 0.2rem 0; font-size: clamp(1.05rem, 4.2vw, 1.35rem);'>"
+    f"<h4 style='margin: 0.4rem 0 0.2rem 0; font-size: clamp(1.0rem, 4.0vw, 1.35rem);'>"
     f"{ticker} — 전일대비 {active_drop:.1f}% 하락 시 매수 ({active_start} ~ {active_end})"
     f"</h4>",
     unsafe_allow_html=True,
 )
 
-# 5. 전체 축 범위 고정값 계산 (축소 시 차트가 가운데로 작아지는 현상 방지)
-full_x0 = -0.5
+# 5. 전체 축 범위 고정값 계산 (안쪽 Y축 눈금과 첫 봉이 겹치지 않도록 좌측 미세 여백 포함)
+left_pad_candles = max(1.5, float(len(df_all)) * 0.035)
+full_x0 = -left_pad_candles
 full_x1 = float(len(df_all)) - 0.5
 
 y_candidates_low = [df_all['Low'].min()]
@@ -874,7 +879,7 @@ else:
 
 fig.update_layout(
     autosize=True,
-    height=530,
+    height=540,
     template='plotly_white',
     dragmode='zoom',
     hovermode='closest',
@@ -883,6 +888,7 @@ fig.update_layout(
         type='category',
         range=[full_x0, full_x1],
         autorange=False,
+        automargin=False,
         rangeslider=dict(visible=False),
         tickmode='array',
         tickvals=tick_points['Date_Str'],
@@ -894,7 +900,9 @@ fig.update_layout(
     yaxis=dict(
         title=None,
         tickprefix='$',
-        tickfont=dict(size=10),
+        ticklabelposition='inside',
+        tickfont=dict(size=10, color='#555555'),
+        automargin=False,
         range=[full_y0, full_y1],
         autorange=False,
         showgrid=True,
@@ -909,10 +917,12 @@ fig.update_layout(
         font=dict(size=10),
         itemsizing='constant'
     ),
-    margin=dict(l=34, r=6, t=48, b=36)
+    margin=dict(l=4, r=4, t=46, b=28)
 )
 
-html_str = pio.to_html(
+# iframe 기본 여백(8px)까지 완전히 제거해 좌우 끝까지 꽉 차게 렌더링
+iframe_reset_css = "<style>html, body { margin: 0 !important; padding: 0 !important; width: 100% !important; overflow-x: hidden; }</style>"
+html_str = iframe_reset_css + pio.to_html(
     fig,
     include_plotlyjs='cdn',
     full_html=False,
